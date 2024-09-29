@@ -1,0 +1,38 @@
+library(dplyr)                                                 
+library(readr) 
+
+setwd(r"[C:\Users\jason\OneDrive\Desktop\NCU\Dissertation Dataset\CC400_CPAC]")
+path1 <-r"[C:\Users\jason\OneDrive\Desktop\NCU\Dissertation Dataset\CC400_CPAC]"
+
+
+files = list.files(pattern = ".csv", path = path1, full.names=T)
+length(files) #1053
+
+# Function to read multiple CSV files and replace the first column with the filename
+read_and_replace_first_column <- function(file_path) {
+  # Extract the filename from the file path
+  filename <- basename(file_path)
+  
+  # Read the CSV file with readr, which is more flexible for handling malformed files
+  data <- read_csv(file_path, col_types = cols(.default = "c"))  # Read all columns as character type
+  
+  # Replace the first column with the filename
+  data[[1]] <- filename
+  
+  return(data)
+}
+
+# Directory where the CSV files are located
+csv_directory <- path1
+
+# Get a list of all CSV files in the directory
+csv_files <- list.files(csv_directory, pattern = "*.csv", full.names = TRUE)
+
+# Read all CSV files and combine them into a single data frame
+all_data <- bind_rows(lapply(csv_files, read_and_replace_first_column))
+
+# Print the combined data frame
+print(all_data)
+
+# Optionally, save the combined data to a new CSV file
+write_csv(all_data, "CC400_combined.csv")
