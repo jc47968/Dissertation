@@ -100,3 +100,12 @@ if (!all(is.na(cor_matrix_first_obs))) {
 } else {
   print("No correlation matrix available for the first observation.")
 }
+
+##Find rows with N/A
+na_rows <- apply(correlation_results_wide, 1, function(x) any(is.na(x)))
+
+# Subset the data frame to get only the rows with NA values
+correlation_results_with_na <- correlation_results_wide[na_rows, ]
+
+# To view the rows with NA values
+print(correlation_results_with_na)
