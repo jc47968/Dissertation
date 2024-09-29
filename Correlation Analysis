@@ -1,0 +1,102 @@
+# Load necessary libraries
+library(dplyr)
+library(tidyr)
+
+setwd(r"[C:\Users\jason\OneDrive\Desktop\NCU\Dissertation Dataset\Disseration Analysis\Correlation Analysis]")
+path = setwd(r"[C:\Users\jason\OneDrive\Desktop\NCU\Dissertation Dataset\Disseration Analysis\Correlation Analysis]")
+
+data <- read.csv(r"[C:\Users\jason\OneDrive\Desktop\NCU\Dissertation Dataset\CC400_combined.csv]")
+
+# Example correlation function to apply for each group
+correlation_analysis <- function(df) {
+  # Exclude the first column and select only numeric columns
+  data_for_correlation <- df[, -1] %>%
+    select_if(is.numeric)
+  
+  # Check if there are numeric columns left for correlation analysis
+  if (ncol(data_for_correlation) > 1) {
+    # Perform correlation analysis (using Pearson by default)
+    cor_matrix <- cor(data_for_correlation, use = "pairwise.complete.obs")
+    
+    # Get lower triangle of the correlation matrix (excluding diagonal)
+    cor_matrix[upper.tri(cor_matrix)] <- NA
+    cor_matrix <- as.data.frame(as.table(cor_matrix))  # Convert matrix to long format
+    cor_matrix <- cor_matrix[!is.na(cor_matrix$Freq), ]  # Remove NA values
+    
+    # Remove self-correlations (where Variable1 == Variable2)
+    cor_matrix <- cor_matrix[cor_matrix$Var1 != cor_matrix$Var2, ]
+    
+    # Rename columns for clarity
+    colnames(cor_matrix) <- c("Variable1", "Variable2", "Correlation")
+  } else {
+    cor_matrix <- NA  # Return NA if there aren't enough numeric columns
+  }
+  
+  return(cor_matrix)
+}
+
+# Group by 'Site' and 'Subject' fields and apply the correlation function to each group
+correlation_results <- data %>%
+  group_by(Site, Subject) %>%
+  do(correlation_analysis = correlation_analysis(.)) %>%
+  unnest(cols = c(correlation_analysis))  # Unnest the correlation results for better readability
+
+# Combine 'Variable1' and 'Variable2' into one column
+correlation_results <- correlation_results %>%
+  mutate(Variable_Pair = paste(Variable1, Variable2, sep = "_")) %>%
+  select(-Variable1, -Variable2)  # Remove the original Variable1 and Variable2 columns
+
+# Spread the data to wide format based on 'Variable_Pair'
+correlation_results_wide <- correlation_results %>%
+  spread(key = Variable_Pair, value = Correlation)
+
+# View the result
+print(correlation_results_wide)
+
+# Optionally, you can save the results into a file
+write.csv(correlation_results_wide, "correlation_results_wide.csv", row.names = FALSE)
+
+##Illustration - Correlation Matrix of First Observation
+library(ggplot2)
+library(reshape2)
+
+# Extract the correlation matrix for the first observation
+first_observation <- data %>%
+  group_by(Site, Subject) %>%
+  do(correlation_matrix = {
+    df <- .[, -1] %>% select_if(is.numeric)  # Exclude the first column and select only numeric columns
+    if (ncol(df) > 1) {
+      cor(df, use = "pairwise.complete.obs")
+    } else {
+      return(NA)
+    }
+  }) %>%
+  ungroup() %>%
+  slice(1)  # Select the first observation
+
+# Extract the correlation matrix for the first observation
+cor_matrix_first_obs <- first_observation$correlation_matrix[[1]]
+
+# Check if the matrix contains valid values (i.e., not all elements are NA)
+if (!all(is.na(cor_matrix_first_obs))) {
+  
+  # Melt the correlation matrix for ggplot2
+  melted_cor_matrix <- melt(cor_matrix_first_obs)
+  
+  # Plot the heatmap
+  ggplot(data = melted_cor_matrix, aes(Var1, Var2, fill = value)) +
+    geom_tile(color = "white") +
+    scale_fill_gradient2(low = "blue", high = "red", mid = "white",
+                         midpoint = 0, limit = c(-1, 1), space = "Lab",
+                         name = "Correlation") +
+    theme_minimal() +
+    theme(axis.text.x = element_text(angle = 45, vjust = 1,
+                                     size = 12, hjust = 1)) +
+    coord_fixed() +
+    labs(title = "Correlation Matrix for the First Observation",
+         x = "Variables",
+         y = "Variables")
+  
+} else {
+  print("No correlation matrix available for the first observation.")
+}
