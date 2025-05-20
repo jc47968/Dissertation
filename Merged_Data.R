@@ -21,7 +21,7 @@ merged_data <- merge(
   corr_data,
   by.x = "SUB_ID",
   by.y = "Subject",
-  all = FALSE # Adjust to FALSE if you want an inner join
+  all = FALSE #inner join
 )
 
 # Remove the Subject column if still present (it's merged as SUB_ID)
