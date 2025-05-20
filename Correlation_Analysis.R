@@ -8,7 +8,6 @@ data <- read.csv(r"[C:\Users\jason\OneDrive\Desktop\NCU\Dissertation Dataset\CC4
 
 # Example correlation function to apply for each group
 correlation_analysis <- function(df) {
-  # Exclude the first column and select only numeric columns
   data_for_correlation <- df[, -1] %>%
     select_if(is.numeric)
   
@@ -22,15 +21,14 @@ correlation_analysis <- function(df) {
     cor_matrix <- as.data.frame(as.table(cor_matrix))  # Convert matrix to long format
     cor_matrix <- cor_matrix[!is.na(cor_matrix$Freq), ]  # Remove NA values
     
-    # Remove self-correlations (where Variable1 == Variable2)
+    # Remove self-correlations 
     cor_matrix <- cor_matrix[cor_matrix$Var1 != cor_matrix$Var2, ]
     
     # Rename columns for clarity
     colnames(cor_matrix) <- c("Variable1", "Variable2", "Correlation")
   } else {
-    cor_matrix <- NA  # Return NA if there aren't enough numeric columns
+    cor_matrix <- NA  
   }
-  
   return(cor_matrix)
 }
 
@@ -38,7 +36,7 @@ correlation_analysis <- function(df) {
 correlation_results <- data %>%
   group_by(Site, Subject) %>%
   do(correlation_analysis = correlation_analysis(.)) %>%
-  unnest(cols = c(correlation_analysis))  # Unnest the correlation results for better readability
+  unnest(cols = c(correlation_analysis))  
 
 # Combine 'Variable1' and 'Variable2' into one column
 correlation_results <- correlation_results %>%
@@ -53,12 +51,6 @@ corr_data_noNA <- na.omit(correlation_results_wide) #remove rows with NA
 
 write.csv(corr_data_noNA, "correlation_results_wide.csv", row.names = FALSE)
 
-
-
-
-
-
-
 ##Illustration - Correlation Matrix of First Observation
 library(ggplot2)
 library(reshape2)
@@ -67,7 +59,7 @@ library(reshape2)
 first_observation <- data %>%
   group_by(Site, Subject) %>%
   do(correlation_matrix = {
-    df <- .[, -1] %>% select_if(is.numeric)  # Exclude the first column and select only numeric columns
+    df <- .[, -1] %>% select_if(is.numeric)  
     if (ncol(df) > 1) {
       cor(df, use = "pairwise.complete.obs")
     } else {
@@ -75,12 +67,12 @@ first_observation <- data %>%
     }
   }) %>%
   ungroup() %>%
-  slice(1)  # Select the first observation
+  slice(1)  
 
 # Extract the correlation matrix for the first observation
 cor_matrix_first_obs <- first_observation$correlation_matrix[[1]]
 
-# Check if the matrix contains valid values (i.e., not all elements are NA)
+# Check if the matrix contains valid values 
 if (!all(is.na(cor_matrix_first_obs))) {
   
   # Melt the correlation matrix for ggplot2
