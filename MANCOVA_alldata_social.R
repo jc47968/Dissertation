@@ -8,7 +8,7 @@ setwd(r"[C:\Users\jason\OneDrive\Desktop\NCU\Dissertation Dataset\Disseration An
 vdata <- fread("varimax_alldata.csv")
 pdata <- fread("promax_alldata.csv")
 
-# Define the dependent variables (PC1 to PC50)
+# Define the dependent variables (PC1 to PC20)
 dependent_vars <- paste0("PC", 1:20)
 
 # Create the formula for MANCOVA
@@ -68,7 +68,7 @@ varimax_detailed_summary_df <- do.call(rbind, lapply(names(varimax_anova_list), 
 # Combine into a single data frame - promax
 promax_detailed_summary_df <- do.call(rbind, lapply(names(promax_anova_list), function(var) {
   df <- promax_anova_list[[var]]
-  df$Dependent_Variable <- var  # Add dependent variable name
+  df$Dependent_Variable <- var
   return(df)
 }))
 
