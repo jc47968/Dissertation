@@ -8,14 +8,14 @@ setwd(r"[C:\Users\jason\OneDrive\Desktop\NCU\Dissertation Dataset\Disseration An
 vdata <- fread("varimax_alldata.csv")
 pdata <- fread("promax_alldata.csv")
 
-# Define the dependent variables (PC1 to PC50)
+# Define the dependent variables (PC1 to PC20)
 dependent_vars <- paste0("PC", 1:20)
 
 # Create the formula for MANCOVA
 mancova_formula <- as.formula(
   paste("cbind(", paste(dependent_vars, collapse = ", "), 
-        ") ~ DX_GROUP * AVG_SOCIAL_INT + AGE_AT_SCAN*DX_GROUP + AGE_AT_SCAN*AVG_SOCIAL_INT +
-        SEX*DX_GROUP + SEX*AVG_SOCIAL_INT + AGE_AT_SCAN * SEX")
+        ") ~ DX_GROUP * AVG_COMM_INT + AGE_AT_SCAN*DX_GROUP + AGE_AT_SCAN*AVG_COMM_INT +
+        SEX*DX_GROUP + SEX*AVG_COMM_INT + AGE_AT_SCAN * SEX")
 )
 
 # Perform MANCOVA for varimax
@@ -61,14 +61,14 @@ promax_anova_list <- lapply(promax_summary_aov, function(x) {
 # Combine into a single data frame - varimax
 varimax_detailed_summary_df <- do.call(rbind, lapply(names(varimax_anova_list), function(var) {
   df <- varimax_anova_list[[var]]
-  df$Dependent_Variable <- var  # Add dependent variable name
+  df$Dependent_Variable <- var  
   return(df)
 }))
 
 # Combine into a single data frame - promax
 promax_detailed_summary_df <- do.call(rbind, lapply(names(promax_anova_list), function(var) {
   df <- promax_anova_list[[var]]
-  df$Dependent_Variable <- var  # Add dependent variable name
+  df$Dependent_Variable <- var  
   return(df)
 }))
 
