@@ -199,7 +199,6 @@ svm_vdata_classes <- predict(svm_vdata, newdata = testing_vdata, type = "raw")
 roc_vdata <- roc(
   testing_vdata$DX_GROUP,
   svm_vdata_predictions[, 2],  
-  levels = rev(levels(testing_vdata$DX_GROUP))
 )
 auc_vdata <- auc(roc_vdata)
 cat("\nAUC for testing_vdata SVM model:\n")
