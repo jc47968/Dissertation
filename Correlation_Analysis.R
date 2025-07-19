@@ -13,7 +13,7 @@ correlation_analysis <- function(df) {
   
   # Check if there are numeric columns left for correlation analysis
   if (ncol(data_for_correlation) > 1) {
-    # Perform correlation analysis (using Pearson by default)
+    # Perform correlation analysis (using Pearson)
     cor_matrix <- cor(data_for_correlation, use = "pairwise.complete.obs")
     
     # Get lower triangle of the correlation matrix (excluding diagonal)
