@@ -25,7 +25,52 @@ pca_result <- prcomp(numeric_vars, center = TRUE, scale. = TRUE)
 # Eigenvalues (variances explained by each component)
 eigenvalues <- pca_result$sdev^2
 
-# Save the scree plot
+# Calculate variance explained
+explained_var <- pca_result$sdev^2
+prop_var <- explained_var / sum(explained_var)
+cum_var <- cumsum(prop_var)
+
+# Create a dataframe
+var_df <- data.frame(
+  PC = paste0("PC", 1:length(prop_var)),
+  Proportion = prop_var,
+  Cumulative = cum_var,
+  Explained_Variance = explained_var
+)
+
+# Print table
+print(var_df)
+write.csv(var_df,"Explained Variance_PCA.csv")
+
+# save the scree plot (Explained Value)
+# Calculate explained variance in percentage
+explained_variance <- (eigenvalues / sum(eigenvalues)) * 100
+
+# Set up PNG output
+png("scree_plot_explained_variance_25_intervals.png", width = 800, height = 600)
+
+# Define x-axis intervals
+num_components <- length(explained_variance)
+x_intervals <- seq(1, num_components, length.out = 25)
+
+# Plot explained variance
+plot(explained_variance, type = "b",
+     main = "Scree Plot - Explained Variance",
+     xlab = "Principal Component",
+     ylab = "Explained Variance (%)",
+     pch = 19, col = "blue", xaxt = "n")
+axis(1, at = x_intervals, labels = round(x_intervals))
+
+# Add vertical reference line at PC20
+abline(v = 20, col = "darkgreen", lty = 3, lwd = 2)
+
+# Close PNG device
+dev.off()
+
+cat("scree_plot_explained_variance_25_intervals.png\n")
+
+
+# Save the scree plot (Eigenvalue)
 png("scree_plot_prcomp_25_intervals.png", width = 800, height = 600)
 num_components <- length(eigenvalues)  # Total number of components
 x_intervals <- seq(1, num_components, length.out = 25)  # Create 25 evenly spaced intervals
@@ -46,7 +91,7 @@ loadings_50 <- as.matrix(pca_result$rotation[, 1:50])
 
 # Perform Varimax rotation
 varimax_result <- varimax(loadings_50)  
-rotated_loadings <- varimax_result$loadings
+rotated_loadings_varimax <- varimax_result$loadings
 
 # Function to find the most important features for each component
 get_top_features <- function(rotated_loadings, top_n = 5) {
@@ -138,7 +183,7 @@ varimax_scores <- as.data.frame(numeric_vars_matrix %*% rotated_loadings)
 
 # Perform Promax rotation
 promax_result <- promax(loadings_50)  # Apply Promax rotation
-rotated_loadings <- promax_result$loadings
+rotated_loadings_promax <- promax_result$loadings
 
 # Function to find the most important features for each component
 get_top_features <- function(rotated_loadings, top_n = 5) {
