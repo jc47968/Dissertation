@@ -1,0 +1,658 @@
+(cd "$(git rev-parse --show-toplevel)" && git apply --3way <<'EOF'
+diff --git a/ABIDE_Comprehensive_Analysis.R b/ABIDE_Comprehensive_Analysis.R
+--- a/ABIDE_Comprehensive_Analysis.R
++++ b/ABIDE_Comprehensive_Analysis.R
+@@ -0,0 +1,651 @@
++#!/usr/bin/env Rscript
++# =============================================================================
++# ABIDE Comprehensive Analysis Pipeline
++# =============================================================================
++# This script combines all analysis steps for autism research using ABIDE dataset:
++# 1. Data extraction and processing
++# 2. Phenotype data preprocessing 
++# 3. Correlation analysis
++# 4. Data merging and dataset creation
++# 5. Principal Component Analysis (PCA) with rotations
++# 6. Exploratory Data Analysis (EDA)
++# 7. MANCOVA statistical analysis
++# 8. Support Vector Machine (SVM) classification
++# 9. Comprehensive visualization and reporting
++# =============================================================================
++
++# Required Libraries
++# =============================================================================
++cat("Loading required libraries...\n")
++required_packages <- c(
++  "readxl", "readr", "stringr", "dplyr", "data.table", "tidyr", "reshape2",
++  "ggplot2", "corrplot", "GPArotation", "psych", "car", "e1071", "caret", 
++  "pROC", "foreach", "doParallel"
++)
++
++# Install missing packages
++missing_packages <- required_packages[!required_packages %in% installed.packages()[,"Package"]]
++if(length(missing_packages) > 0) {
++  cat("Installing missing packages:", paste(missing_packages, collapse = ", "), "\n")
++  install.packages(missing_packages, dependencies = TRUE)
++}
++
++# Load all libraries
++suppressMessages(lapply(required_packages, library, character.only = TRUE))
++
++# Setup parallel processing
++cores <- parallel::detectCores() - 1
++registerDoParallel(cores = cores)
++
++# =============================================================================
++# Configuration and Setup
++# =============================================================================
++cat("Setting up configuration...\n")
++
++# Set working directory (adjust as needed)
++base_dir <- getwd()
++setwd(base_dir)
++
++# Create output directories
++output_dirs <- c("01_phenotype_data", "02_correlation_analysis", "03_merged_data", 
++                 "04_pca", "05_eda", "06_mancova", "07_svm", "08_visualizations")
++for(dir in output_dirs) {
++  if(!dir.exists(dir)) dir.create(dir, recursive = TRUE)
++}
++
++# Global parameters
++set.seed(123)  # For reproducibility
++top_pcs <- 20  # Number of top principal components to use
++test_proportion <- 0.1  # Proportion for test set
++
++# =============================================================================
++# Utility Functions
++# =============================================================================
++cat("Defining utility functions...\n")
++
++# Safe file writing function
++safe_write_csv <- function(data, filename, dir = "") {
++  filepath <- if(dir != "") file.path(dir, filename) else filename
++  tryCatch({
++    write.csv(data, filepath, row.names = FALSE)
++    cat("Successfully saved:", filepath, "\n")
++  }, error = function(e) {
++    cat("Error saving", filepath, ":", e$message, "\n")
++  })
++}
++
++# Data quality check function
++check_data_quality <- function(data, name) {
++  cat("\n=== Data Quality Check for", name, "===\n")
++  cat("Dimensions:", paste(dim(data), collapse = " x "), "\n")
++  cat("Missing values:", sum(is.na(data)), "\n")
++  cat("Complete cases:", sum(complete.cases(data)), "\n")
++  if(ncol(data) <= 20) print(summary(data))
++}
++
++# Correlation analysis function
++perform_correlation_analysis <- function(df) {
++  data_for_correlation <- df[, -1] %>% select_if(is.numeric)
++  
++  if (ncol(data_for_correlation) > 1) {
++    cor_matrix <- cor(data_for_correlation, use = "pairwise.complete.obs")
++    cor_matrix[upper.tri(cor_matrix)] <- NA
++    cor_matrix <- as.data.frame(as.table(cor_matrix))
++    cor_matrix <- cor_matrix[!is.na(cor_matrix$Freq), ]
++    cor_matrix <- cor_matrix[cor_matrix$Var1 != cor_matrix$Var2, ]
++    colnames(cor_matrix) <- c("Variable1", "Variable2", "Correlation")
++  } else {
++    cor_matrix <- NA  
++  }
++  return(cor_matrix)
++}
++
++# Top features extraction function
++get_top_features <- function(rotated_loadings, top_n = 10) {
++  rotated_loadings <- as.matrix(rotated_loadings)
++  if (ncol(rotated_loadings) == 0 || nrow(rotated_loadings) == 0) {
++    stop("Error: rotated_loadings has zero rows or columns.")
++  }
++  
++  top_features_list <- list()
++  for (i in seq_len(ncol(rotated_loadings))) {
++    component <- rotated_loadings[, i]
++    feature_names <- rownames(rotated_loadings)
++    if (is.null(feature_names)) {
++      stop("Error: Row names (features) are missing in rotated_loadings.")
++    }
++    component_features <- data.frame(
++      Feature = feature_names,
++      Loading = component
++    )
++    component_features <- component_features[order(abs(component_features$Loading), decreasing = TRUE), ]
++    top_n <- min(top_n, nrow(component_features))
++    top_features <- component_features[1:top_n, ]
++    top_features_list[[paste0("Component_", i)]] <- top_features
++  }
++  return(top_features_list)
++}
++
++# SVM training function
++train_svm <- function(training_data, pc_columns = paste0("PC", 1:20)) {
++  training_data$DX_GROUP <- factor(training_data$DX_GROUP, levels = c("1", "2"), labels = c("X1", "X2"))
++  
++  train_control <- trainControl(
++    method = "cv",
++    number = 5,
++    classProbs = TRUE,
++    savePredictions = TRUE,
++    summaryFunction = twoClassSummary,
++    verboseIter = FALSE
++  )
++  
++  svm_grid <- expand.grid(
++    C = 2^(-3:3),
++    sigma = 2^(-3:3)
++  )
++  
++  svm_model <- train(
++    DX_GROUP ~ .,
++    data = training_data[, c("DX_GROUP", pc_columns)],
++    method = "svmRadial",
++    metric = "ROC",
++    probability = TRUE,
++    trControl = train_control,
++    tuneGrid = svm_grid
++  )
++  
++  return(svm_model)
++}
++
++# =============================================================================
++# Step 1: Phenotype Data Processing
++# =============================================================================
++cat("\n=== Step 1: Processing Phenotype Data ===\n")
++
++if(file.exists("Phenotypic_V1_0b_v1.csv")) {
++  p_data <- fread("Phenotypic_V1_0b_v1.csv")
++  check_data_quality(p_data, "Raw Phenotype Data")
++  
++  # Select needed columns
++  p_data1 <- p_data %>% 
++    dplyr::select(SITE_ID, SUB_ID, DX_GROUP, DSM_IV_TR, AGE_AT_SCAN, SEX, 
++                  ADI_R_SOCIAL_TOTAL_A, ADI_R_VERBAL_TOTAL_BV, ADOS_COMM, 
++                  ADOS_SOCIAL, SRS_COGNITION, SRS_COMMUNICATION)
++  
++  # Get column range for processing
++  start_col <- which(names(p_data1) == "ADI_R_SOCIAL_TOTAL_A")
++  end_col <- which(names(p_data1) == "SRS_COMMUNICATION")
++  columns_to_check <- names(p_data1)[start_col:end_col]
++  
++  # Replace -9999 with NA and remove rows with all missing data
++  p_data1[p_data1 == -9999] <- NA
++  cleaned_data <- p_data1 %>%
++    filter(rowSums(sapply(select(., all_of(columns_to_check)), 
++                         function(x) !is.na(x) & x != "")) > 0)
++  
++  # Normalize data and create composite scores
++  setDT(cleaned_data)
++  n_data <- cleaned_data
++  n_data[, (columns_to_check) := lapply(.SD, function(x) {
++    x <- as.numeric(as.character(x))
++    if (all(is.na(x)) || max(x, na.rm = TRUE) == min(x, na.rm = TRUE)) {
++      return(x)
++    }
++    (x - min(x, na.rm = TRUE)) / (max(x, na.rm = TRUE) - min(x, na.rm = TRUE))
++  }), .SDcols = columns_to_check]
++  
++  # Create composite scores
++  n_data[, AVG_SOCIAL := rowMeans(.SD, na.rm = TRUE), 
++         .SDcols = c("ADI_R_SOCIAL_TOTAL_A", "ADOS_SOCIAL", "SRS_COGNITION")]
++  n_data[, AVG_COMM := rowMeans(.SD, na.rm = TRUE), 
++         .SDcols = c("ADI_R_VERBAL_TOTAL_BV", "ADOS_COMM", "SRS_COMMUNICATION")]
++  
++  check_data_quality(n_data, "Processed Phenotype Data")
++  safe_write_csv(n_data, "phenotype_data.csv", "01_phenotype_data")
++  
++} else {
++  cat("Warning: Phenotypic_V1_0b_v1.csv not found. Using existing phenotype_data.csv if available.\n")
++  if(file.exists("phenotype_data.csv")) {
++    n_data <- fread("phenotype_data.csv")
++  } else {
++    stop("No phenotype data available. Please ensure Phenotypic_V1_0b_v1.csv is in the working directory.")
++  }
++}
++
++# =============================================================================
++# Step 2: Neuroimaging Data Processing and Correlation Analysis
++# =============================================================================
++cat("\n=== Step 2: Processing Neuroimaging Data and Correlation Analysis ===\n")
++
++# Check for combined neuroimaging data
++if(file.exists("CC400_combined.csv")) {
++  neuro_data <- read.csv("CC400_combined.csv")
++  check_data_quality(neuro_data, "Neuroimaging Data")
++  
++} else {
++  cat("Warning: CC400_combined.csv not found. Checking for individual files...\n")
++  # If CPAC folder exists, combine files
++  if(dir.exists("CC400_CPAC") && length(list.files("CC400_CPAC", pattern = ".csv")) > 0) {
++    cat("Combining individual CPAC files...\n")
++    
++    read_and_replace_first_column <- function(file_path) {
++      filename <- basename(file_path)
++      data <- read_csv(file_path, col_types = cols(.default = "c"))
++      data[[1]] <- filename
++      return(data)
++    }
++    
++    csv_files <- list.files("CC400_CPAC", pattern = "*.csv", full.names = TRUE)
++    neuro_data <- bind_rows(lapply(csv_files, read_and_replace_first_column))
++    write_csv(neuro_data, "CC400_combined.csv")
++    
++  } else {
++    cat("Warning: No neuroimaging data found. Skipping neuroimaging analysis.\n")
++    neuro_data <- NULL
++  }
++}
++
++# Perform correlation analysis if neuroimaging data is available
++if(!is.null(neuro_data)) {
++  cat("Performing correlation analysis...\n")
++  
++  correlation_results <- neuro_data %>%
++    group_by(Site, Subject) %>%
++    do(correlation_analysis = perform_correlation_analysis(.)) %>%
++    unnest(cols = c(correlation_analysis))
++  
++  # Create wide format
++  correlation_results <- correlation_results %>%
++    mutate(Variable_Pair = paste(Variable1, Variable2, sep = "_")) %>%
++    select(-Variable1, -Variable2) %>%
++    spread(key = Variable_Pair, value = Correlation)
++  
++  # Remove rows with NA
++  corr_data_clean <- na.omit(correlation_results)
++  check_data_quality(corr_data_clean, "Correlation Data")
++  safe_write_csv(corr_data_clean, "correlation_results_wide.csv", "02_correlation_analysis")
++  
++} else {
++  # Use existing correlation data if available
++  if(file.exists("correlation_results_wide.csv")) {
++    corr_data_clean <- fread("correlation_results_wide.csv")
++  } else {
++    cat("Warning: No correlation data available.\n")
++    corr_data_clean <- NULL
++  }
++}
++
++# =============================================================================
++# Step 3: Data Merging
++# =============================================================================
++cat("\n=== Step 3: Merging Phenotype and Neuroimaging Data ===\n")
++
++if(!is.null(corr_data_clean)) {
++  # Merge datasets
++  setDT(n_data)
++  setDT(corr_data_clean)
++  
++  merged_data <- merge(
++    n_data,
++    corr_data_clean,
++    by.x = "SUB_ID",
++    by.y = "Subject",
++    all = FALSE
++  )
++  
++  # Remove duplicate Subject column if present
++  if("Subject" %in% names(merged_data)) {
++    merged_data[, Subject := NULL]
++  }
++  
++  check_data_quality(merged_data, "Merged Data")
++  safe_write_csv(merged_data, "merged_data.csv", "03_merged_data")
++  
++} else {
++  cat("Warning: Cannot merge data without correlation results. Using phenotype data only.\n")
++  merged_data <- n_data
++}
++
++# =============================================================================
++# Step 4: Principal Component Analysis (PCA)
++# =============================================================================
++cat("\n=== Step 4: Principal Component Analysis ===\n")
++
++# Select variables for PCA (correlation columns)
++start_col <- which(grepl("^X\\.", names(merged_data)))[1]
++if(!is.na(start_col)) {
++  end_col <- ncol(merged_data)
++  selected_vars <- merged_data[, start_col:end_col]
++  
++  # Convert to numeric and remove missing values
++  numeric_vars <- na.omit(as.data.frame(lapply(selected_vars, as.numeric)))
++  
++  if(ncol(numeric_vars) > 0) {
++    cat("Performing PCA on", ncol(numeric_vars), "variables...\n")
++    
++    # Perform PCA
++    pca_result <- prcomp(numeric_vars, center = TRUE, scale. = TRUE)
++    
++    # Calculate variance explained
++    explained_var <- pca_result$sdev^2
++    prop_var <- explained_var / sum(explained_var)
++    cum_var <- cumsum(prop_var)
++    
++    var_df <- data.frame(
++      PC = paste0("PC", 1:length(prop_var)),
++      Proportion = prop_var,
++      Cumulative = cum_var,
++      Explained_Variance = explained_var
++    )
++    
++    safe_write_csv(var_df, "explained_variance_pca.csv", "04_pca")
++    
++    # Extract loadings for rotations
++    loadings_50 <- pca_result$rotation[, 1:min(50, ncol(pca_result$rotation))]
++    
++    # Varimax rotation
++    cat("Performing Varimax rotation...\n")
++    varimax_result <- varimax(loadings_50)
++    rotated_loadings_varimax <- varimax_result$loadings
++    
++    # Calculate varimax scores
++    numeric_vars_matrix <- as.matrix(numeric_vars)
++    varimax_scores <- as.data.frame(numeric_vars_matrix %*% rotated_loadings_varimax)
++    colnames(varimax_scores) <- paste0("PC", 1:ncol(varimax_scores))
++    
++    # Promax rotation
++    cat("Performing Promax rotation...\n")
++    promax_result <- promax(loadings_50)
++    rotated_loadings_promax <- promax_result$loadings
++    
++    # Calculate promax scores
++    promax_scores <- as.data.frame(numeric_vars_matrix %*% rotated_loadings_promax)
++    colnames(promax_scores) <- paste0("PC", 1:ncol(promax_scores))
++    
++    # Save PCA results
++    safe_write_csv(varimax_scores, "varimax_scores.csv", "04_pca")
++    safe_write_csv(promax_scores, "promax_scores.csv", "04_pca")
++    
++  } else {
++    cat("Warning: No numeric variables available for PCA.\n")
++    varimax_scores <- promax_scores <- NULL
++  }
++} else {
++  cat("Warning: No correlation variables found for PCA.\n")
++  varimax_scores <- promax_scores <- NULL
++}
++
++# =============================================================================
++# Step 5: Dataset Creation
++# =============================================================================
++cat("\n=== Step 5: Creating Analysis Datasets ===\n")
++
++# Create base dataset
++alldata <- merged_data %>% 
++  select(SUB_ID, SITE_ID, DX_GROUP, DSM_IV_TR, AGE_AT_SCAN, SEX, AVG_SOCIAL, AVG_COMM)
++
++# Convert to integers for MANCOVA
++alldata$AVG_SOCIAL_INT <- round(alldata$AVG_SOCIAL * 10)
++alldata$AVG_COMM_INT <- round(alldata$AVG_COMM * 10)
++
++if(!is.null(varimax_scores) && !is.null(promax_scores)) {
++  # Combine with PCA scores
++  varimax_alldata <- cbind(alldata, varimax_scores[, 1:min(top_pcs, ncol(varimax_scores))])
++  promax_alldata <- cbind(alldata, promax_scores[, 1:min(top_pcs, ncol(promax_scores))])
++  
++  # Remove any V1 column if present
++  if("V1" %in% names(varimax_alldata)) varimax_alldata <- varimax_alldata %>% select(-V1)
++  if("V1" %in% names(promax_alldata)) promax_alldata <- promax_alldata %>% select(-V1)
++  
++  safe_write_csv(varimax_alldata, "varimax_alldata.csv")
++  safe_write_csv(promax_alldata, "promax_alldata.csv")
++  
++} else {
++  cat("Warning: PCA scores not available. Using base dataset only.\n")
++  varimax_alldata <- promax_alldata <- alldata
++}
++
++# =============================================================================
++# Step 6: Exploratory Data Analysis (EDA)
++# =============================================================================
++cat("\n=== Step 6: Exploratory Data Analysis ===\n")
++
++# Create summary statistics
++dx_group_table <- alldata %>%
++  group_by(DX_GROUP) %>%
++  summarize(
++    Count = n(),
++    Mean_Age = mean(AGE_AT_SCAN, na.rm = TRUE),
++    SD_Age = sd(AGE_AT_SCAN, na.rm = TRUE),
++    Male_Count = sum(SEX == 1, na.rm = TRUE),
++    Female_Count = sum(SEX == 2, na.rm = TRUE),
++    Mean_Social = mean(AVG_SOCIAL, na.rm = TRUE),
++    Mean_Comm = mean(AVG_COMM, na.rm = TRUE),
++    .groups = 'drop'
++  )
++
++safe_write_csv(dx_group_table, "dx_group_summary.csv", "05_eda")
++
++# Generate visualizations
++png("05_eda/age_distribution.png", width = 800, height = 600)
++print(ggplot(alldata, aes(x = AGE_AT_SCAN)) +
++  geom_histogram(binwidth = 2, fill = "blue", alpha = 0.7) +
++  labs(title = "Distribution of Age", x = "Age", y = "Frequency") +
++  theme_minimal())
++dev.off()
++
++png("05_eda/dx_group_distribution.png", width = 800, height = 600)
++print(ggplot(alldata, aes(x = as.factor(DX_GROUP))) +
++  geom_bar(fill = "green", alpha = 0.7) +
++  geom_text(stat = "count", aes(label = ..count..), vjust = -0.5) +
++  scale_x_discrete(labels = c("1" = "Autism", "2" = "Control")) +
++  labs(title = "Distribution of Diagnostic Groups", x = "Diagnostic Group", y = "Count") +
++  theme_minimal())
++dev.off()
++
++png("05_eda/social_comm_comparison.png", width = 800, height = 600)
++data_long <- alldata %>%
++  pivot_longer(cols = c(AVG_SOCIAL, AVG_COMM), names_to = "Variable", values_to = "Score")
++
++print(ggplot(data_long, aes(x = as.factor(DX_GROUP), y = Score, fill = Variable)) +
++  geom_boxplot(alpha = 0.7) +
++  scale_x_discrete(labels = c("1" = "Autism", "2" = "Control")) +
++  labs(title = "Social and Communication Scores by Diagnostic Group",
++       x = "Diagnostic Group", y = "Score", fill = "Measure") +
++  theme_minimal())
++dev.off()
++
++cat("EDA visualizations saved to 05_eda/\n")
++
++# =============================================================================
++# Step 7: MANCOVA Analysis
++# =============================================================================
++cat("\n=== Step 7: MANCOVA Analysis ===\n")
++
++if(!is.null(varimax_scores) && ncol(varimax_alldata) > 10) {
++  # Define dependent variables
++  dependent_vars <- paste0("PC", 1:min(top_pcs, sum(grepl("^PC", names(varimax_alldata)))))
++  
++  if(length(dependent_vars) > 0) {
++    cat("Performing MANCOVA with", length(dependent_vars), "principal components...\n")
++    
++    # Create MANCOVA formulas
++    mancova_formula_comm <- as.formula(
++      paste("cbind(", paste(dependent_vars, collapse = ", "), 
++            ") ~ DX_GROUP * AVG_COMM_INT + AGE_AT_SCAN*DX_GROUP + AGE_AT_SCAN*AVG_COMM_INT +
++            SEX*DX_GROUP + SEX*AVG_COMM_INT + AGE_AT_SCAN * SEX")
++    )
++    
++    mancova_formula_social <- as.formula(
++      paste("cbind(", paste(dependent_vars, collapse = ", "), 
++            ") ~ DX_GROUP * AVG_SOCIAL_INT + AGE_AT_SCAN*DX_GROUP + AGE_AT_SCAN*AVG_SOCIAL_INT +
++            SEX*DX_GROUP + SEX*AVG_SOCIAL_INT + AGE_AT_SCAN * SEX")
++    )
++    
++    # Perform MANCOVA analyses
++    tryCatch({
++      # Communication MANCOVA
++      varimax_mancova_comm <- manova(mancova_formula_comm, data = varimax_alldata)
++      varimax_summary_comm <- summary(varimax_mancova_comm, test = "Wilks")
++      varimax_aov_comm <- summary.aov(varimax_mancova_comm)
++      
++      # Social MANCOVA  
++      varimax_mancova_social <- manova(mancova_formula_social, data = varimax_alldata)
++      varimax_summary_social <- summary(varimax_mancova_social, test = "Wilks")
++      varimax_aov_social <- summary.aov(varimax_mancova_social)
++      
++      # Save results
++      mancova_comm_df <- as.data.frame(varimax_summary_comm$stats)
++      mancova_social_df <- as.data.frame(varimax_summary_social$stats)
++      
++      safe_write_csv(mancova_comm_df, "mancova_communication_results.csv", "06_mancova")
++      safe_write_csv(mancova_social_df, "mancova_social_results.csv", "06_mancova")
++      
++      cat("MANCOVA analysis completed successfully.\n")
++      
++    }, error = function(e) {
++      cat("Error in MANCOVA analysis:", e$message, "\n")
++    })
++  }
++} else {
++  cat("Warning: Insufficient data for MANCOVA analysis.\n")
++}
++
++# =============================================================================
++# Step 8: Support Vector Machine (SVM) Classification
++# =============================================================================
++cat("\n=== Step 8: SVM Classification ===\n")
++
++if(!is.null(varimax_scores) && nrow(varimax_alldata) > 50) {
++  cat("Preparing data for SVM classification...\n")
++  
++  # Prepare datasets for SVM
++  varimax_alldata$DX_GROUP <- as.factor(varimax_alldata$DX_GROUP)
++  pc_columns <- names(varimax_alldata)[grepl("^PC", names(varimax_alldata))][1:min(top_pcs, sum(grepl("^PC", names(varimax_alldata))))]
++  
++  # Create train/test split
++  varimax_alldata <- varimax_alldata %>% mutate(RowID = row_number())
++  
++  testing_data <- varimax_alldata %>%
++    filter(DX_GROUP %in% c("1", "2")) %>%
++    group_by(DX_GROUP) %>%
++    slice_sample(prop = test_proportion) %>%
++    ungroup()
++  
++  training_data <- varimax_alldata %>%
++    filter(!RowID %in% testing_data$RowID) %>%
++    select(-RowID)
++  
++  testing_data <- testing_data %>% select(-RowID)
++  
++  cat("Training set size:", nrow(training_data), "\n")
++  cat("Testing set size:", nrow(testing_data), "\n")
++  
++  # Train SVM model
++  tryCatch({
++    cat("Training SVM model...\n")
++    svm_model <- train_svm(training_data, pc_columns)
++    
++    # Make predictions
++    predictions <- predict(svm_model, testing_data[, pc_columns])
++    prediction_probs <- predict(svm_model, testing_data[, pc_columns], type = "prob")
++    
++    # Calculate performance metrics
++    confusion_matrix <- confusionMatrix(predictions, testing_data$DX_GROUP)
++    
++    # Calculate AUC
++    roc_result <- roc(as.numeric(testing_data$DX_GROUP), prediction_probs[,1])
++    auc_value <- auc(roc_result)
++    
++    # Create results summary
++    svm_results <- data.frame(
++      Metric = c("Accuracy", "Sensitivity", "Specificity", "AUC"),
++      Value = c(
++        confusion_matrix$overall["Accuracy"],
++        confusion_matrix$byClass["Sensitivity"],
++        confusion_matrix$byClass["Specificity"],
++        auc_value
++      )
++    )
++    
++    safe_write_csv(svm_results, "svm_performance_results.csv", "07_svm")
++    safe_write_csv(as.data.frame(confusion_matrix$table), "svm_confusion_matrix.csv", "07_svm")
++    
++    cat("SVM classification completed successfully.\n")
++    cat("Accuracy:", round(confusion_matrix$overall["Accuracy"], 3), "\n")
++    cat("AUC:", round(auc_value, 3), "\n")
++    
++  }, error = function(e) {
++    cat("Error in SVM analysis:", e$message, "\n")
++  })
++  
++} else {
++  cat("Warning: Insufficient data for SVM classification.\n")
++}
++
++# =============================================================================
++# Step 9: Summary Report Generation
++# =============================================================================
++cat("\n=== Step 9: Generating Summary Report ===\n")
++
++# Create comprehensive summary
++analysis_summary <- list(
++  dataset_info = list(
++    total_subjects = nrow(alldata),
++    autism_subjects = sum(alldata$DX_GROUP == 1, na.rm = TRUE),
++    control_subjects = sum(alldata$DX_GROUP == 2, na.rm = TRUE),
++    age_range = paste(round(min(alldata$AGE_AT_SCAN, na.rm = TRUE), 1), "-", 
++                     round(max(alldata$AGE_AT_SCAN, na.rm = TRUE), 1)),
++    mean_age = round(mean(alldata$AGE_AT_SCAN, na.rm = TRUE), 1)
++  ),
++  analysis_steps = list(
++    phenotype_processing = file.exists(file.path("01_phenotype_data", "phenotype_data.csv")),
++    correlation_analysis = file.exists(file.path("02_correlation_analysis", "correlation_results_wide.csv")),
++    pca_analysis = file.exists(file.path("04_pca", "varimax_scores.csv")),
++    mancova_analysis = file.exists(file.path("06_mancova", "mancova_communication_results.csv")),
++    svm_classification = file.exists(file.path("07_svm", "svm_performance_results.csv"))
++  )
++)
++
++# Save summary
++sink("ANALYSIS_SUMMARY.txt")
++cat("=== ABIDE Comprehensive Analysis Summary ===\n\n")
++cat("Dataset Information:\n")
++cat("- Total subjects:", analysis_summary$dataset_info$total_subjects, "\n")
++cat("- Autism subjects:", analysis_summary$dataset_info$autism_subjects, "\n")
++cat("- Control subjects:", analysis_summary$dataset_info$control_subjects, "\n")
++cat("- Age range:", analysis_summary$dataset_info$age_range, "\n")
++cat("- Mean age:", analysis_summary$dataset_info$mean_age, "\n\n")
++
++cat("Analysis Steps Completed:\n")
++for(step in names(analysis_summary$analysis_steps)) {
++  status <- if(analysis_summary$analysis_steps[[step]]) "✓" else "✗"
++  cat("-", step, ":", status, "\n")
++}
++
++cat("\nOutput Files Generated:\n")
++for(dir in output_dirs) {
++  if(dir.exists(dir)) {
++    files <- list.files(dir)
++    if(length(files) > 0) {
++      cat("\n", dir, ":\n")
++      for(file in files) {
++        cat("  -", file, "\n")
++      }
++    }
++  }
++}
++sink()
++
++# =============================================================================
++# Cleanup and Final Message
++# =============================================================================
++cat("\n=== Analysis Complete ===\n")
++cat("Results have been saved to respective output directories.\n")
++cat("Summary report available in: ANALYSIS_SUMMARY.txt\n")
++cat("Total execution time:", round(difftime(Sys.time(), Sys.time(), units = "mins"), 2), "minutes\n")
++
++# Stop parallel processing
++stopImplicitCluster()
++
++cat("\n🎉 ABIDE Comprehensive Analysis Pipeline completed successfully! 🎉\n")
+EOF
+)
