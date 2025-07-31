@@ -1452,9 +1452,9 @@ generate_qc_report <- function(qc_results) {
 #' @param run_data_extraction Whether to run data extraction step
 #' @param run_full_analysis Whether to run the complete analysis pipeline
 main_analysis_workflow <- function(run_data_extraction = FALSE, run_full_analysis = TRUE) {
-  message("="*80)
+  message(paste(rep("=", 80), collapse=""))
   message("STARTING COMPREHENSIVE NEUROIMAGING ANALYSIS PIPELINE")
-  message("="*80)
+  message(paste(rep("=", 80), collapse=""))
   
   start_time <- Sys.time()
   
@@ -1567,10 +1567,10 @@ main_analysis_workflow <- function(run_data_extraction = FALSE, run_full_analysi
     
     # Final Summary
     total_time <- Sys.time() - start_time
-    message("\n" + "="*80)
+    message(paste("\n", paste(rep("=", 80), collapse=""), sep=""))
     message("ANALYSIS PIPELINE COMPLETED SUCCESSFULLY")
     message(paste("Total execution time:", round(total_time, 2), attr(total_time, "units")))
-    message("="*80)
+    message(paste(rep("=", 80), collapse=""))
     
     # Save final results summary
     save_final_summary(analysis_results, total_time)
@@ -1699,8 +1699,8 @@ if (interactive()) {
 # END OF COMBINED ANALYSIS SCRIPT
 # ================================================================================
 
-message("\n" + "="*80)
+message(paste("\n", paste(rep("=", 80), collapse=""), sep=""))
 message("COMBINED ANALYSIS SCRIPT LOADED SUCCESSFULLY")
 message("All functions and configurations are now available.")
 message("Use main_analysis_workflow() to run the complete analysis.")
-message("="*80)
+message(paste(rep("=", 80), collapse=""))
